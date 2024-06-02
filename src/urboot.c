@@ -344,6 +344,10 @@
 #define DUAL                  0
 #endif
 
+#if !defined(DUAL_INTERN) || !defined(DUAL)
+#define DUAL_INTERN           0
+#endif
+
 // Vector bootloaders
 #define VBL_NONE              0 // Regular bootloader for an MCU with boot section support
 #define VBL_JUMP              1 // Bootloader jumps to the application via an interrupt vector
@@ -370,7 +374,7 @@
 
 #if !defined(SFMCS) && !defined(TEMPLATE)
 #define TEMPLATE              1
-#elif DUAL && !defined(SFMCS) && defined(TEMPLATE) && ! TEMPLATE
+#elif DUAL && !defined(DUAL_INTERN) && !defined(SFMCS) && defined(TEMPLATE) && ! TEMPLATE
 #error DUAL needs to know the chip select for external memory, eg, SFMCS=ArduinoPin8, or TEMPLATE=1
 #endif
 
@@ -1360,7 +1364,7 @@ typedef uint32_t VBLvect_t;     // Larger AVRs have 4-byte vectors (jmp)
 #define appVectOrigHi (((uint16_t *) & appVectOrig)[1])
 
 
-#if VBL >= VBL_VERIFY || VBL == VBL_PATCH
+#if VBL >= VBL_VERIFY || VBL == VBL_PATCH || ( defined(DUAL_INTERN) && VBL == 1 )
 
 // Check VBL_VECT_NUM vector is on the first page (patching and verifying code assume that)
 #if VBL_VECT_NUM >= SPM_PAGESIZE/(FLASHin8k? 2: 4)
@@ -1455,7 +1459,7 @@ void vbl_patch() {
 #endif // VBL
 
 
-#if DUAL
+#if defined(DUAL) && !defined(DUAL_INTERN)
 
 // SPI flash memory
 // Universal SPI flash memory commands
@@ -1517,6 +1521,111 @@ static void sfm_read_page() {
 #define inczaddresspage() ({ zaddress += SPM_PAGESIZE; })
 #endif
 
+#define FLASH_HALF ( (FLASHEND + 1UL) >> 1 )
+
+#if DUAL_INTERN
+
+/// Read eintire page of flash data from zaddress + FLASH_HALF and
+/// store it in sram (rambuf). Restore zaddress to it's original vaue
+/// after that.
+///
+/// WARNING: this code doesn't restore the RAMPZ register. Thus it
+/// probably won't work with devices with >64k flash.
+ static void read_page_fl_to_sram() {
+    uint8_t *bufp = rambuf;
+    spm_pagesize_store_t length = (spm_pagesize_store_t) SPM_PAGESIZE;
+    uint16_t origzaddr = zaddress;
+    zaddress += FLASH_HALF;
+    // todo: make sure to adapt RAMPZ as well for larger devices.
+    do {
+       uint8_t one;
+       // Can use lpm/elpm with address post-increment (elmp also increments RAMPZ)
+       asm volatile(LPM_OP " %0,Z+\n": "=r"(one), "=&r"(zaddress): "1"(zaddress));
+       *bufp++ = one;
+    } while(--length);
+    zaddress = origzaddr;
+    // todo: adapt RAMPZ for large devices if necessary (not sure how
+    // to detect this).
+ }
+
+
+ /// Read potential app image from specific temporary flash[1]
+ /// address, write it to flash start, replacing old app code, and
+ /// reboot the device. The temporary app image is garbage collected
+ /// afterwards in the flash process.
+ ///
+ /// WARNING: this code is not yet tested and probably won't work with
+ /// devices with >64k FLASH. See above `read_page_fl_to_sram`
+ ///
+ /// As usual dual boot, the flash process doesn't start if the first
+ /// byte isn't a rjump op-code. In this case the flash data is left
+ /// untouched and the boot loader jumps into the application.
+ ///
+ /// [1] specific flash address is expected to be the middle between
+ /// 0x0000 and FLASHEND+1. This makes it easy to determine the size
+ /// of new code which shall not exceed (flash_size -
+ /// bootloader_size)/2 or (FLASHENBD - START)/2.
+ static void dual_boot(){
+    zaddress = 0;             // RAMPZ will be 0 here
+
+    /// Max number of pages to write must fit between half of flash
+    /// size and start of the boot loader.
+    ///
+    /// todo: make sure (START - FLASH_HALF ) is SPM_PAGESIZE aligned,
+    /// otherwise the calculation below won't work.
+    spm_pages_index_t numpages = (spm_pages_index_t) ((START - FLASH_HALF ) / SPM_PAGESIZE);
+    do {
+
+       /// Read next page from flash at current zadress + FALSH_HALF
+       /// and store it in sram (rambuf)
+       read_page_fl_to_sram();
+
+#if FLASHabove64k
+       if(RAMPZ == 0)
+#endif
+          if(zaddress == 0) {
+             // On first (vector) page check whether reset vector is an rjmp or jmp instruction
+             if(
+#if FLASHabove4M                // jmp for an MCU with more than 4M flash (should be so lucky :)
+                (resethi8 >> 1) != (0x94U >> 1) &&
+#elif FLASHabove8k              // Otherwise jmp opcode has 0x94 as high byte
+                resethi8 != 0x94U &&
+#endif
+                !isRjmp(resethi8) )
+                return;
+
+#if VBL == VBL_PATCH || VBL == VBL_VERIFY || ( defined(DUAL_INTERN) && VBL == 1 )
+             /// If VBL is enabled we always need to patch the
+             /// vector-table as there is no avrdude/urclock that does
+             /// it from automatically. On the other hand VBL cannot
+             /// be set to VBL_PATCH every time DUAL_INTERN is
+             /// enabled, otherwise usual flashing as per urclock
+             /// won't work.
+             vbl_patch();
+#endif
+          }
+
+       writebuffer((uint16_t *) rambuf); // Returns with original zaddress/RAMPZ intact
+       inczaddresspage();
+    } while(--numpages);
+
+    /// delete temporary application data: clear all between FLASHEND/2 to START
+    /// zpointer must be pointing to FLASHEND/2 now thus just erase up to START
+    ///
+    /// *warning* this will delete all data below bootloader! do we
+    /// *care? If yes, how to detect it's size?
+    numpages = (spm_pages_index_t) ((START - FLASH_HALF ) / SPM_PAGESIZE);
+    do {
+       ub_page_erase();
+       inczaddresspage();
+    } while (--numpages);
+
+    /// all done. leave the boot loader
+    watchdogConfig(WATCHDOG_1S);        // not sure if this is needed.
+    bootexit();
+ }
+
+# else // DUAL_INTERN
 static void dual_boot() {
       /*
        * Define relevant SPI pins as outputs - CS must be output for SPI to work in master mode.
@@ -1616,6 +1725,7 @@ startingapp:
 #endif
 #endif // DUAL_NO_SPI_RESET
 }
+#endif // DUAL_INTERN
 #endif // DUAL
 
 
