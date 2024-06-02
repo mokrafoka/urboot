@@ -43,6 +43,7 @@ MCU ?= atmega328p
 F_CPU ?= 16000000L
 EEPROM ?= 1
 DUAL ?= 0
+DUAL_INTERN ?=0
 WDTO = 1S
 
 # Basic naming convention, sth, like atmega328p_16mhz_115200bps_e_wdto1s.hex, can be overridden by NAME=...
@@ -60,6 +61,7 @@ endif
 WHAT := $(WHAT)$(subst 0,,$(subst 1,w,$(PGMWRITEPAGE)))
 WHAT := $(WHAT)$(subst 0,,$(subst 1,e,$(EEPROM)))
 WHAT := $(WHAT)$(subst 0,,$(subst 1,d,$(DUAL)))
+WHAT := $(WHAT)$(subst 0,,$(subst 1,d,$(DUAL_INTERN)))
 
 # vector bootloader (able to program a chip that resets to addr 0)
 ifdef VBL
@@ -84,6 +86,7 @@ EEPROM_CMD = -DEEPROM=$(EEPROM)
 
 # DUAL boot from external SPI memory (you must set SFMCS below if so)
 DUAL_CMD = -DDUAL=$(DUAL)
+DUAL_INTERN_CMD = -DDUAL_INTERN=$(DUAL_INTERN)
 
 # SFMCS chip select line of external SPI flash memory (eg, ArduinoPin8 or AtmelPB0)
 ifdef SFMCS
@@ -323,7 +326,7 @@ OBJDUMP        = $(GCCROOT)avr-objdump
 SIZE           = $(GCCROOT)avr-size
 
 COMMON_OPTIONS = $(WDTO_CMD) $(AUTOBAUD_CMD) $(BAUD_RATE_CMD) $(UART2X_CMD) $(LED_CMD) \
-  $(LEDPOLARITY_CMD) $(TEMPLATE_CMD) $(BLINK_CMD) $(DUAL_CMD) $(SFMCS_CMD) $(EEPROM_CMD) \
+  $(LEDPOLARITY_CMD) $(TEMPLATE_CMD) $(BLINK_CMD) $(DUAL_CMD) $(DUAL_INTERN_CMD) $(SFMCS_CMD) $(EEPROM_CMD) \
   $(EXITFE_CMD) $(QEXITERR_CMD) $(QEXITEND_CMD) $(URPROTOCOL_CMD) $(VERSION_CMD) $(FRILLS_CMD) \
   $(RETSWVERS_CMD) $(VBL_CMD) $(VBL_VECT_NUM_CMD) $(CHIP_ERASE_CMD) $(RESETFLAGS_CMD) $(SWIO_CMD) \
   $(UARTNUM_CMD) $(UARTALT_CMD) $(TX_CMD) $(RX_CMD) $(TESTING_CMD) $(PGMWRITEPAGE_CMD) \
