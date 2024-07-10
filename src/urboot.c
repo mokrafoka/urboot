@@ -1364,7 +1364,7 @@ typedef uint32_t VBLvect_t;     // Larger AVRs have 4-byte vectors (jmp)
 #define appVectOrigHi (((uint16_t *) & appVectOrig)[1])
 
 
-#if VBL >= VBL_VERIFY || VBL == VBL_PATCH || ( defined(DUAL_INTERN) && VBL == 1 )
+#if VBL >= VBL_VERIFY || VBL == VBL_PATCH || ( defined(DUAL_INTERN) && VBL != 0 )
 
 // Check VBL_VECT_NUM vector is on the first page (patching and verifying code assume that)
 #if VBL_VECT_NUM >= SPM_PAGESIZE/(FLASHin8k? 2: 4)
